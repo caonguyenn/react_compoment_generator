@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      target: dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./src:/app/src
+      - ./public:/app/public
+      - designs-data:/app/designs
+      - /app/node_modules
+    env_file:
+      - .env.local
+    environment:
+      - DESIGNS_PATH=/app/designs
+      - NODE_ENV=development
+      - VITE_PORT_START=5173
+      - VITE_PORT_END=5222
+    command: /app/scripts/init-designs.sh
+
+volumes:
+  designs-data:
