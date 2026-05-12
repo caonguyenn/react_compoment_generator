@@ -32,9 +32,9 @@ export async function POST(
       );
     }
 
-    // Run vite build in the design directory
+    // Run vite build with relative base so the ZIP is self-contained
     try {
-      const { stdout, stderr } = await execAsync('npm run build', {
+      const { stdout, stderr } = await execAsync('npx vite build --base=./', {
         cwd: designPath,
         timeout: 60000, // 60 second timeout
         env: { ...process.env, NODE_ENV: 'production' },

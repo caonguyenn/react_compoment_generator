@@ -5,16 +5,16 @@ import JSZip from 'jszip';
 import { designService } from '@/lib/design-service';
 
 const DESIGN_ID_REGEX = /^[A-Za-z0-9_-]+$/;
+const SKIP_ENTRIES = new Set(['node_modules', 'dist', 'metadata.json', '.vite']);
 
 async function addDirectoryToZip(zip: JSZip, dirPath: string, zipPath: string = '') {
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
   for (const entry of entries) {
-    // Skip symlinks to prevent following node_modules or escaping the design directory
-    if (entry.isSymbolicLink()) continue;
+    if (entry.isSymbolicLink() || SKIP_ENTRIES.has(entry.name)) continue;
 
     const fullPath = path.join(dirPath, entry.name);
-    const zipEntryPath = zipPath ? path.join(zipPath, entry.name) : entry.name;
+    const zipEntryPath = zipPath ? `${zipPath}/${entry.name}` : entry.name;
 
     if (entry.isDirectory()) {
       await addDirectoryToZip(zip, fullPath, zipEntryPath);
@@ -37,54 +37,31 @@ export async function GET(
     }
 
     const designPath = designService.getDesignPath(designId);
-    const distPath = path.join(designPath, 'dist');
 
-    // Check if design exists
     try {
       await fs.access(designPath);
     } catch {
-      return NextResponse.json(
-        { error: 'Design not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'Design not found' }, { status: 404 });
     }
 
-    // Check if dist/ exists
-    try {
-      await fs.access(distPath);
-    } catch {
-      return NextResponse.json(
-        { error: 'Build not found. Run build first.' },
-        { status: 404 }
-      );
-    }
-
-    // Create ZIP archive
     const zip = new JSZip();
+    await addDirectoryToZip(zip, designPath);
 
-    // Add all files from dist/ directory
-    await addDirectoryToZip(zip, distPath);
-
-    // Generate ZIP buffer
     const zipBuffer = await zip.generateAsync({
       type: 'nodebuffer',
       compression: 'DEFLATE',
-      compressionOptions: { level: 9 },
+      compressionOptions: { level: 6 },
     });
 
-    // Return ZIP file
     return new NextResponse(Buffer.from(zipBuffer), {
       headers: {
         'Content-Type': 'application/zip',
-        'Content-Disposition': `attachment; filename="design-${designId}.zip"`,
+        'Content-Disposition': `attachment; filename="design-${designId}-source.zip"`,
         'Content-Length': zipBuffer.length.toString(),
       },
     });
   } catch (error) {
     console.error('Export error:', error);
-    return NextResponse.json(
-      { error: 'Failed to export design' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Failed to export design' }, { status: 500 });
   }
 }
