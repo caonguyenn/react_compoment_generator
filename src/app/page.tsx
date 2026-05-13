@@ -54,9 +54,9 @@ export default function Home() {
     }
   };
 
-  const handleCreateNewDesign = async (name: string, description: string) => {
+  const handleCreateNewDesign = async (name: string, description: string, mode: 'static' | 'dynamic' = 'static') => {
     try {
-      const designId = await createDesign(name, description);
+      const designId = await createDesign(name, description, mode);
       await loadDesigns();
       // Start BEFORE selectDesign so previewUrl is null when the re-render fires
       vitePreview.startPreview(designId);

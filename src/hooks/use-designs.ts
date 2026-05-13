@@ -9,7 +9,7 @@ interface UseDesignsReturn {
   activeDesignId: string | null;
   isLoading: boolean;
   loadDesigns: () => Promise<void>;
-  createDesign: (name: string, description?: string) => Promise<string>;
+  createDesign: (name: string, description?: string, mode?: 'static' | 'dynamic') => Promise<string>;
   selectDesign: (id: string) => Promise<void>;
   deleteDesign: (id: string) => Promise<void>;
   saveFile: (path: string, content: string) => Promise<void>;
@@ -41,11 +41,11 @@ export function useDesigns(): UseDesignsReturn {
     }
   }, []);
 
-  const createDesign = useCallback(async (name: string, description?: string): Promise<string> => {
+  const createDesign = useCallback(async (name: string, description?: string, mode: 'static' | 'dynamic' = 'static'): Promise<string> => {
     const response = await fetch('/api/designs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, prompt: description || '' }),
+      body: JSON.stringify({ name, prompt: description || '', mode }),
     });
     if (!response.ok) {
       const err = await response.json();

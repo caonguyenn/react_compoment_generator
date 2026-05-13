@@ -1,15 +1,19 @@
 'use client';
 
 import { useState } from 'react';
+import { Layers, Database } from 'lucide-react';
+
+type DesignMode = 'static' | 'dynamic';
 
 interface NewDesignModalProps {
   onClose: () => void;
-  onCreate: (name: string, description: string) => Promise<void>;
+  onCreate: (name: string, description: string, mode: DesignMode) => Promise<void>;
 }
 
 export default function NewDesignModal({ onClose, onCreate }: NewDesignModalProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [mode, setMode] = useState<DesignMode>('static');
   const [isCreating, setIsCreating] = useState(false);
 
   const canCreate = name.trim().length > 0;
@@ -18,7 +22,7 @@ export default function NewDesignModal({ onClose, onCreate }: NewDesignModalProp
     if (!canCreate || isCreating) return;
     setIsCreating(true);
     try {
-      await onCreate(name.trim(), description.trim());
+      await onCreate(name.trim(), description.trim(), mode);
     } finally {
       setIsCreating(false);
     }
@@ -79,6 +83,53 @@ export default function NewDesignModal({ onClose, onCreate }: NewDesignModalProp
               rows={3}
               className="w-full px-3 py-2.5 text-sm border border-claude-gray-200 rounded-lg focus:outline-none focus:border-claude-coral resize-none transition-colors"
             />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-claude-gray-500 mb-2">
+              Project type
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setMode('static')}
+                className={`flex flex-col items-start p-3 border-2 rounded-lg transition-all ${
+                  mode === 'static'
+                    ? 'border-claude-coral bg-claude-coral/5'
+                    : 'border-claude-gray-200 hover:border-claude-gray-300'
+                }`}
+              >
+                <div className={`p-1.5 rounded-md mb-2 ${
+                  mode === 'static' ? 'bg-claude-coral text-white' : 'bg-claude-gray-100 text-claude-gray-600'
+                }`}>
+                  <Layers size={16} />
+                </div>
+                <div className="text-left">
+                  <div className="text-sm font-medium text-claude-gray-700">Static</div>
+                  <div className="text-xs text-claude-gray-500 mt-0.5">React component, no database</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMode('dynamic')}
+                className={`flex flex-col items-start p-3 border-2 rounded-lg transition-all ${
+                  mode === 'dynamic'
+                    ? 'border-claude-coral bg-claude-coral/5'
+                    : 'border-claude-gray-200 hover:border-claude-gray-300'
+                }`}
+              >
+                <div className={`p-1.5 rounded-md mb-2 ${
+                  mode === 'dynamic' ? 'bg-claude-coral text-white' : 'bg-claude-gray-100 text-claude-gray-600'
+                }`}>
+                  <Database size={16} />
+                </div>
+                <div className="text-left">
+                  <div className="text-sm font-medium text-claude-gray-700">Dynamic</div>
+                  <div className="text-xs text-claude-gray-500 mt-0.5">Next.js app + PostgreSQL</div>
+                </div>
+              </button>
+            </div>
           </div>
 
           <p className="text-xs text-claude-gray-400">
