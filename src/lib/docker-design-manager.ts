@@ -10,19 +10,13 @@ import {
   MAX_DOCKER_STACKS,
   DOCKER_IDLE_TIMEOUT,
   DOCKER_STARTUP_TIMEOUT,
-  POSTGRES_IMAGE,
-  NEXTJS_APP_IMAGE,
-  DOCKER_LABEL,
-  POSTGRES_PASSWORD,
 } from './design-constants';
 
 const exec = promisify(execFile);
 
 export interface StackInfo {
   designId: string;
-  appContainerId: string;
-  dbContainerId: string;
-  networkId: string;
+  projectName: string;
   port: number;
   status: 'starting' | 'ready' | 'error' | 'stopping';
   startedAt: number;
@@ -31,8 +25,8 @@ export interface StackInfo {
 }
 
 /**
- * DooD (Docker-out-of-Docker) container lifecycle manager for dynamic designs.
- * Each design gets: Next.js app container + Postgres container + Docker network + named volume.
+ * DooD (Docker-out-of-Docker) stack manager using Docker Compose for dynamic designs.
+ * Each design gets its own docker-compose.yml with Next.js app + Postgres.
  */
 class DockerDesignManager {
   private stacks = new Map<string, StackInfo>();
@@ -51,7 +45,7 @@ class DockerDesignManager {
     this.startIdleChecker();
     this.registerCleanupHandlers();
 
-    // Cleanup orphaned containers on startup
+    // Cleanup orphaned compose stacks on startup
     this.cleanupOrphans().catch(err => {
       console.error('[DockerDesignManager] Orphan cleanup failed:', err);
     });
@@ -67,12 +61,20 @@ class DockerDesignManager {
   }
 
   /**
+   * Get project name for docker compose (must be valid compose project name)
+   */
+  private getProjectName(designId: string): string {
+    // Docker Compose project names must be lowercase alphanumeric + hyphens
+    return `design-${designId.toLowerCase()}`;
+  }
+
+  /**
    * Ensure a Docker stack is running for the design.
    * Starts if not running, returns info if already started.
    * Thread-safe: concurrent calls for same ID return same Promise.
    */
   async ensureStack(designId: string): Promise<StackInfo> {
-    this.validateDesignId(designId); // Prevent command injection
+    this.validateDesignId(designId);
 
     if (!DOCKER_ENABLED) {
       throw new Error('Docker support is disabled');
@@ -96,12 +98,12 @@ class DockerDesignManager {
       return this.pending.get(designId)!;
     }
 
-    // Start new stack - wrap in async to handle cleanup inside promise
+    // Start new stack
     const promise = (async () => {
       try {
         return await this.doStartStack(designId);
       } catch (error) {
-        this.pending.delete(designId); // Clean up on error
+        this.pending.delete(designId);
         throw error;
       }
     })();
@@ -116,7 +118,7 @@ class DockerDesignManager {
   }
 
   /**
-   * Internal: Start a complete Docker stack (network → db → app)
+   * Internal: Start Docker Compose stack
    */
   private async doStartStack(designId: string): Promise<StackInfo> {
     // Verify design exists
@@ -124,8 +126,10 @@ class DockerDesignManager {
     try {
       const fs = await import('fs/promises');
       await fs.access(designPath);
+      // Verify docker-compose.yml exists
+      await fs.access(`${designPath}/docker-compose.yml`);
     } catch {
-      throw new Error(`Design not found: ${designId}`);
+      throw new Error(`Design or docker-compose.yml not found: ${designId}`);
     }
 
     // LRU eviction if at capacity
@@ -137,11 +141,10 @@ class DockerDesignManager {
     const port = this.portPool.allocate(designId);
 
     const now = Date.now();
+    const projectName = this.getProjectName(designId);
     const stackInfo: StackInfo = {
       designId,
-      appContainerId: '',
-      dbContainerId: '',
-      networkId: '',
+      projectName,
       port,
       status: 'starting',
       startedAt: now,
@@ -152,52 +155,25 @@ class DockerDesignManager {
     this.stacks.set(designId, stackInfo);
 
     try {
-      // Step 1: Create Docker network
-      const networkName = `design-${designId}-net`;
-      const { stdout: networkId } = await exec('docker', [
-        'network', 'create',
-        '--label', DOCKER_LABEL,
-        networkName,
-      ]);
-      stackInfo.networkId = networkId.trim();
+      // Update docker-compose.yml with allocated port
+      await this.updateComposePort(designPath, port);
 
-      // Step 2: Start Postgres container
-      const dbName = `design-${designId}-db`;
-      const volumeName = `design-${designId}-pgdata`;
-      const { stdout: dbContainerId } = await exec('docker', [
-        'run', '-d',
-        '--name', dbName,
-        '--network', networkName,
-        '--label', DOCKER_LABEL,
-        '-e', `POSTGRES_PASSWORD=${POSTGRES_PASSWORD}`,
-        '-e', 'POSTGRES_DB=app',
-        '-v', `${volumeName}:/var/lib/postgresql/data`,
-        POSTGRES_IMAGE,
-      ]);
-      stackInfo.dbContainerId = dbContainerId.trim();
+      // Start docker compose (cwd = designPath, so docker-compose.yml is found automatically)
+      await exec('docker', [
+        'compose',
+        '-p', projectName,
+        'up', '-d',
+        '--build',
+        '--remove-orphans',
+      ], {
+        cwd: designPath,
+      });
 
-      // Step 3: Poll Postgres ready
-      await this.waitForPostgres(dbName);
+      // Give the container time to start npm install before polling
+      console.log(`[DockerDesignManager] Waiting for container to start npm install...`);
+      await new Promise(resolve => setTimeout(resolve, 5000)); // 5 second grace period
 
-      // Step 4: Start Next.js app container
-      const appName = `design-${designId}-app`;
-      const databaseUrl = `postgresql://postgres:${POSTGRES_PASSWORD}@${dbName}:5432/app`;
-      const { stdout: appContainerId } = await exec('docker', [
-        'run', '-d',
-        '--name', appName,
-        '--network', networkName,
-        '--label', DOCKER_LABEL,
-        '-p', `${port}:3000`,
-        '-e', `DATABASE_URL=${databaseUrl}`,
-        '-e', 'NODE_ENV=development',
-        '-v', `${designPath}:/app`,
-        '-w', '/app',
-        NEXTJS_APP_IMAGE,
-        'sh', '-c', 'npm install && npx prisma migrate deploy && npm run dev',
-      ]);
-      stackInfo.appContainerId = appContainerId.trim();
-
-      // Step 5: Poll HTTP ready
+      // Wait for HTTP ready
       await this.waitForHTTP(port);
 
       // Update status
@@ -208,13 +184,30 @@ class DockerDesignManager {
     } catch (error) {
       // Cleanup on failure
       stackInfo.status = 'error';
-      await this.destroyStack(designId, true); // force=true to cleanup partial state
+      await this.destroyStack(designId, true);
       throw error;
     }
   }
 
   /**
-   * Stop app container only (preserve db, volume, network)
+   * Update port in docker-compose.yml
+   */
+  private async updateComposePort(designPath: string, port: number): Promise<void> {
+    const fs = await import('fs/promises');
+    const composePath = `${designPath}/docker-compose.yml`;
+    let content = await fs.readFile(composePath, 'utf-8');
+
+    // Replace port binding in app service (handles both "3000:3000" and "0.0.0.0:3000:3000" formats)
+    content = content.replace(
+      /ports:\s*\n\s*-\s*["']?(?:0\.0\.0\.0:)?(?:\d+):3000["']?/,
+      `ports:\n      - "0.0.0.0:${port}:3000"`
+    );
+
+    await fs.writeFile(composePath, content, 'utf-8');
+  }
+
+  /**
+   * Stop Docker Compose stack
    */
   async stopStack(designId: string): Promise<void> {
     const stack = this.stacks.get(designId);
@@ -223,18 +216,20 @@ class DockerDesignManager {
     stack.status = 'stopping';
 
     try {
-      if (stack.appContainerId) {
-        // Wait for container to fully stop (5s grace period)
-        await exec('docker', ['stop', '-t', '5', stack.appContainerId]);
-        await exec('docker', ['rm', stack.appContainerId]);
-      }
+      const designPath = designService.getDesignPath(designId);
+      await exec('docker', [
+        'compose',
+        '-p', stack.projectName,
+        'down',
+      ], {
+        cwd: designPath,
+      });
 
       this.portPool.release(designId);
       this.stacks.delete(designId);
       console.log(`[DockerDesignManager] Stack stopped for design ${designId}`);
     } catch (error) {
       console.error(`[DockerDesignManager] Error stopping stack ${designId}:`, error);
-      // Still release resources to avoid deadlock
       this.portPool.release(designId);
       this.stacks.delete(designId);
       throw error;
@@ -242,40 +237,65 @@ class DockerDesignManager {
   }
 
   /**
-   * Destroy entire stack (both containers, network, volume)
+   * Destroy entire stack including volumes
    */
   async destroyStack(designId: string, force = false): Promise<void> {
     const stack = this.stacks.get(designId);
+    const projectName = stack?.projectName || this.getProjectName(designId);
 
     try {
-      const appName = `design-${designId}-app`;
-      const dbName = `design-${designId}-db`;
-      const networkName = `design-${designId}-net`;
-      const volumeName = `design-${designId}-pgdata`;
+      const designPath = designService.getDesignPath(designId);
 
-      // Stop and remove app container
-      if (stack?.appContainerId || force) {
-        await exec('docker', ['stop', appName]).catch(() => {});
-        await exec('docker', ['rm', appName]).catch(() => {});
-      }
-
-      // Stop and remove db container
-      if (stack?.dbContainerId || force) {
-        await exec('docker', ['stop', dbName]).catch(() => {});
-        await exec('docker', ['rm', dbName]).catch(() => {});
-      }
-
-      // Remove network
-      if (stack?.networkId || force) {
-        await exec('docker', ['network', 'rm', networkName]).catch(() => {});
-      }
-
-      // Remove volume
+      // Try with compose file first (if design folder still exists)
       try {
-        await exec('docker', ['volume', 'rm', volumeName]);
-      } catch (error) {
-        console.error(`[DockerDesignManager] Failed to remove volume ${volumeName}:`, error);
-        // Volume may still be mounted - will be cleaned by orphan cleanup
+        const fs = await import('fs/promises');
+        await fs.access(`${designPath}/docker-compose.yml`);
+
+        await exec('docker', [
+          'compose',
+          '-p', projectName,
+          'down',
+          '-v',
+        ], {
+          cwd: designPath,
+        });
+      } catch (accessError) {
+        // Compose file doesn't exist, try project name only
+        // This works if containers are still running
+        console.warn(`[DockerDesignManager] Compose file not found, using project name fallback for ${designId}`);
+
+        // Stop containers by project label
+        const { stdout: containerIds } = await exec('docker', [
+          'ps', '-aq',
+          '--filter', `label=com.docker.compose.project=${projectName}`,
+        ]).catch(() => ({ stdout: '' }));
+
+        if (containerIds.trim()) {
+          const ids = containerIds.trim().split('\n');
+          await exec('docker', ['rm', '-f', ...ids]).catch(() => {});
+        }
+
+        // Remove project volumes
+        const { stdout: volumes } = await exec('docker', [
+          'volume', 'ls', '-q',
+          '--filter', `label=com.docker.compose.project=${projectName}`,
+        ]).catch(() => ({ stdout: '' }));
+
+        if (volumes.trim()) {
+          const volList = volumes.trim().split('\n');
+          await exec('docker', ['volume', 'rm', ...volList]).catch(() => {});
+        }
+
+        // Remove project network
+        const { stdout: networks } = await exec('docker', [
+          'network', 'ls', '-q',
+          '--filter', `label=com.docker.compose.project=${projectName}`,
+        ]).catch(() => ({ stdout: '' }));
+
+        if (networks.trim()) {
+          const netList = networks.trim().split('\n');
+          await exec('docker', ['network', 'rm', ...netList]).catch(() => {});
+        }
       }
 
       if (stack) {
@@ -335,7 +355,7 @@ class DockerDesignManager {
       this.checkIdle().catch(err => {
         console.error('[DockerDesignManager] Idle check failed:', err);
       });
-    }, 60000); // 1 minute
+    }, 60000);
   }
 
   /**
@@ -360,37 +380,74 @@ class DockerDesignManager {
   }
 
   /**
-   * Cleanup orphaned containers/networks on startup
+   * Cleanup orphaned compose projects on startup
    */
   private async cleanupOrphans(): Promise<void> {
     try {
-      // Find stopped containers with our label
+      // List all containers with compose project labels starting with "design-"
       const { stdout: containerIds } = await exec('docker', [
-        'ps', '-a',
-        '--filter', `label=${DOCKER_LABEL}`,
-        '--filter', 'status=exited',
-        '-q',
+        'ps', '-aq',
+        '--filter', 'label=com.docker.compose.project',
       ]).catch(() => ({ stdout: '' }));
 
-      if (containerIds.trim()) {
-        const ids = containerIds.trim().split('\n');
-        await exec('docker', ['rm', ...ids]).catch(() => {});
-        console.log(`[DockerDesignManager] Removed ${ids.length} orphaned containers`);
+      if (!containerIds.trim()) return;
+
+      // Get project names from containers
+      const projectNames = new Set<string>();
+      const ids = containerIds.trim().split('\n');
+
+      for (const id of ids) {
+        const { stdout } = await exec('docker', [
+          'inspect',
+          '--format', '{{index .Config.Labels "com.docker.compose.project"}}',
+          id,
+        ]).catch(() => ({ stdout: '' }));
+
+        const projectName = stdout.trim();
+        if (projectName.startsWith('design-')) {
+          projectNames.add(projectName);
+        }
       }
 
-      // Find orphaned networks (no containers using them)
-      const { stdout: networkList } = await exec('docker', [
-        'network', 'ls',
-        '--filter', `label=${DOCKER_LABEL}`,
-        '--format', '{{.Name}}',
-      ]).catch(() => ({ stdout: '' }));
+      // Cleanup each orphaned design project
+      for (const projectName of projectNames) {
+        // Check if container is stopped
+        const { stdout: status } = await exec('docker', [
+          'ps', '-a',
+          '--filter', `label=com.docker.compose.project=${projectName}`,
+          '--filter', 'status=exited',
+          '--format', '{{.ID}}',
+        ]).catch(() => ({ stdout: '' }));
 
-      if (networkList.trim()) {
-        const networks = networkList.trim().split('\n');
-        for (const network of networks) {
-          await exec('docker', ['network', 'rm', network]).catch(() => {});
+        if (status.trim()) {
+          // Remove stopped containers
+          const stoppedIds = status.trim().split('\n');
+          await exec('docker', ['rm', '-f', ...stoppedIds]).catch(() => {});
+
+          // Remove volumes
+          const { stdout: volumes } = await exec('docker', [
+            'volume', 'ls', '-q',
+            '--filter', `label=com.docker.compose.project=${projectName}`,
+          ]).catch(() => ({ stdout: '' }));
+
+          if (volumes.trim()) {
+            const volList = volumes.trim().split('\n');
+            await exec('docker', ['volume', 'rm', ...volList]).catch(() => {});
+          }
+
+          // Remove networks
+          const { stdout: networks } = await exec('docker', [
+            'network', 'ls', '-q',
+            '--filter', `label=com.docker.compose.project=${projectName}`,
+          ]).catch(() => ({ stdout: '' }));
+
+          if (networks.trim()) {
+            const netList = networks.trim().split('\n');
+            await exec('docker', ['network', 'rm', ...netList]).catch(() => {});
+          }
+
+          console.log(`[DockerDesignManager] Cleaned orphaned project ${projectName}`);
         }
-        console.log(`[DockerDesignManager] Cleaned ${networks.length} orphaned networks`);
       }
     } catch (error) {
       console.error('[DockerDesignManager] Orphan cleanup error:', error);
@@ -398,22 +455,18 @@ class DockerDesignManager {
   }
 
   /**
-   * Wait for Postgres to be ready
+   * Get Docker host IP for accessing host ports from within containers
    */
-  private async waitForPostgres(containerName: string): Promise<void> {
-    const maxRetries = 30;
-    const retryDelay = 1000; // 1 second
-
-    for (let i = 0; i < maxRetries; i++) {
-      try {
-        await exec('docker', ['exec', containerName, 'pg_isready']);
-        return; // Success
-      } catch {
-        if (i === maxRetries - 1) {
-          throw new Error('Postgres failed to start within 30 seconds');
-        }
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
-      }
+  private async getDockerHostIP(): Promise<string> {
+    try {
+      // Try to get the default bridge gateway IP
+      const { stdout } = await exec('docker', [
+        'network', 'inspect', 'bridge',
+        '--format', '{{(index .IPAM.Config 0).Gateway}}'
+      ]);
+      return stdout.trim() || '172.17.0.1'; // Fallback to default bridge gateway
+    } catch {
+      return '172.17.0.1'; // Default Docker bridge gateway on Linux
     }
   }
 
@@ -422,42 +475,53 @@ class DockerDesignManager {
    */
   private async waitForHTTP(port: number): Promise<void> {
     const maxRetries = 60;
-    const retryDelay = 1000; // 1 second
+    const retryDelay = 1000;
     const startTime = Date.now();
+
+    // Get Docker host IP (bridge gateway) to access host ports from container
+    const hostIP = await this.getDockerHostIP();
+    console.log(`[DockerDesignManager] Using Docker host IP: ${hostIP} for HTTP checks`);
 
     for (let i = 0; i < maxRetries; i++) {
       try {
-        // Check remaining time before request
         const timeRemaining = DOCKER_STARTUP_TIMEOUT - (Date.now() - startTime);
         if (timeRemaining <= 0) {
-          throw new Error(`Next.js app failed to start within ${DOCKER_STARTUP_TIMEOUT / 1000}s`);
+          throw new Error(`App failed to start within ${DOCKER_STARTUP_TIMEOUT / 1000}s`);
         }
 
         await new Promise<void>((resolve, reject) => {
-          const timeout = Math.min(2000, timeRemaining);
-          const req = http.get(`http://localhost:${port}/`, { timeout }, (res) => {
+          const timeout = Math.min(5000, timeRemaining); // Increase from 2s to 5s
+          // Use Docker bridge gateway IP to access ports bound on the Docker host
+          const req = http.get(`http://${hostIP}:${port}/`, { timeout }, (res) => {
             if (res.statusCode && res.statusCode < 500) {
+              console.log(`[DockerDesignManager] HTTP check successful on port ${port}`);
               resolve();
             } else {
               reject(new Error(`HTTP ${res.statusCode}`));
             }
           });
 
-          req.on('error', reject);
+          req.on('error', (err) => {
+            // Log connection errors for debugging
+            if (i % 10 === 0) { // Log every 10th attempt
+              console.log(`[DockerDesignManager] HTTP check attempt ${i + 1}/${maxRetries} failed:`, err.message);
+            }
+            reject(err);
+          });
           req.on('timeout', () => {
             req.destroy();
             reject(new Error('Timeout'));
           });
         });
 
-        return; // Success
+        return;
       } catch {
         const timeElapsed = Date.now() - startTime;
         if (timeElapsed > DOCKER_STARTUP_TIMEOUT) {
-          throw new Error(`Next.js app failed to start within ${DOCKER_STARTUP_TIMEOUT / 1000}s`);
+          throw new Error(`App failed to start within ${DOCKER_STARTUP_TIMEOUT / 1000}s`);
         }
         if (i === maxRetries - 1) {
-          throw new Error('Next.js app failed to respond to HTTP requests');
+          throw new Error('App failed to respond to HTTP requests');
         }
         await new Promise(resolve => setTimeout(resolve, retryDelay));
       }

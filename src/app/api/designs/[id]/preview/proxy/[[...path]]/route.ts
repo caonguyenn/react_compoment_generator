@@ -6,6 +6,8 @@ export async function GET(
   request: NextRequest,
   { params }: { params: { id: string; path?: string[] } }
 ) {
+  console.log('[Proxy] Request for design:', params.id, 'path:', params.path);
+
   // Check both managers for running preview
   const server = viteServerManager.getServer(params.id);
   const stack = dockerDesignManager.getStack(params.id);
@@ -28,7 +30,11 @@ export async function GET(
   const fullPath = basePath === '/' ? `/${subPath}` : `${basePath}${subPath}`;
   const url = new URL(request.url);
   const query = url.search || '';
-  const targetUrl = `http://localhost:${port}${fullPath}${query}`;
+
+  // For DooD: use Docker bridge gateway IP to access host ports from container
+  // For static mode: localhost works since Vite runs as child process
+  const host = stack ? process.env.DOCKER_HOST_IP || '172.17.0.1' : 'localhost';
+  const targetUrl = `http://${host}:${port}${fullPath}${query}`;
 
   try {
     const headers: Record<string, string> = {};
@@ -41,6 +47,22 @@ export async function GET(
     const contentType = response.headers.get('content-type');
     if (contentType) responseHeaders.set('content-type', contentType);
     responseHeaders.set('cache-control', 'no-store, no-cache, must-revalidate');
+
+    // For HTML responses, rewrite absolute URLs to proxy through our route
+    if (contentType?.includes('text/html') && !subPath) {
+      const html = await response.text();
+      const proxyBase = `/api/designs/${params.id}/preview/proxy`;
+
+      // Rewrite absolute URLs to go through proxy
+      const modifiedHtml = html
+        .replace(/href=["']\/(?!\/)/g, `href="${proxyBase}/`)
+        .replace(/src=["']\/(?!\/)/g, `src="${proxyBase}/`);
+
+      return new NextResponse(modifiedHtml, {
+        status: response.status,
+        headers: responseHeaders,
+      });
+    }
 
     return new NextResponse(response.body, {
       status: response.status,

@@ -7,7 +7,7 @@ services:
       target: dev
     ports:
       - "3000:3000"
-      - "6001-6100:6001-6100"  # Dynamic design preview ports (DooD containers)
+      # Dynamic design ports (6001-6100) are bound by child containers via DooD, not here
     volumes:
       - ./src:/app/src
       - ./public:/app/public
@@ -19,6 +19,7 @@ services:
     environment:
       - DESIGNS_PATH=/app/designs
       - NODE_ENV=development
+      - DOCKER_HOST_IP=172.17.0.1
       # Static mode (Vite)
       - VITE_PORT_START=5173
       - VITE_PORT_END=5222

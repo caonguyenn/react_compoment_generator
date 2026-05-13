@@ -35,6 +35,7 @@ import {
   getGlobalsCss,
   getPrismaClient,
 } from './next-project-template';
+import { generateDockerCompose } from './export-templates';
 import type { DesignMetadata, DesignSummary, DesignDetail, DesignChatMessage } from '@/types/design';
 
 class DesignService {
@@ -168,12 +169,13 @@ class DesignService {
   }
 
   /**
-   * Scaffold complete Next.js project structure with Prisma
+   * Scaffold complete Next.js project structure with Prisma and Docker Compose
    */
   private async scaffoldNextjsProject(
     id: string,
     designPath: string,
-    initialCode?: string
+    initialCode?: string,
+    port?: number
   ): Promise<void> {
     // Create directories
     await fs.mkdir(path.join(designPath, 'src', 'app'), { recursive: true });
@@ -188,6 +190,7 @@ class DesignService {
       fs.writeFile(path.join(designPath, 'tailwind.config.ts'), getNextTailwindConfig()),
       fs.writeFile(path.join(designPath, 'postcss.config.js'), getNextPostCssConfig()),
       fs.writeFile(path.join(designPath, 'prisma', 'schema.prisma'), getPrismaSchema()),
+      fs.writeFile(path.join(designPath, 'docker-compose.yml'), generateDockerCompose('dev', port, id)),
     ]);
 
     // Write source files
@@ -207,7 +210,8 @@ class DesignService {
     name: string,
     prompt: string,
     initialCode?: string,
-    mode: 'static' | 'dynamic' = 'static'
+    mode: 'static' | 'dynamic' = 'static',
+    port?: number
   ): Promise<DesignMetadata> {
     // Check design count limit
     const existing = await this.listDesigns();
@@ -227,7 +231,7 @@ class DesignService {
       if (mode === 'static') {
         await this.scaffoldViteProject(id, designPath, initialCode);
       } else {
-        await this.scaffoldNextjsProject(id, designPath, initialCode);
+        await this.scaffoldNextjsProject(id, designPath, initialCode, port);
       }
 
       // Create metadata

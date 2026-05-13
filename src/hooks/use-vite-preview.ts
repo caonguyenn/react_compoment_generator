@@ -140,21 +140,73 @@ export function useVitePreview(_designId?: string): UseVitePreviewReturn {
         throw new Error(error.error || 'Failed to start preview server');
       }
 
-      const data = await response.json();
+      const contentType = response.headers.get('content-type');
 
-      if (currentDesignId.current !== id) return;
+      // Handle SSE stream for dynamic mode
+      if (contentType?.includes('text/event-stream')) {
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-      setState((prev) => ({
-        ...prev,
-        previewUrl: data.status === 'ready' ? `${data.url}?t=${Date.now()}` : null,
-        status: data.status === 'ready' ? 'ready' : 'starting',
-        error: null,
-        port: data.port,
-      }));
+        while (reader) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-      // If still starting, poll for ready status
-      if (data.status === 'starting') {
-        await pollForReady(id);
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const eventMatch = line.match(/^event: (.+)$/m);
+            const dataMatch = line.match(/^data: (.+)$/m);
+
+            if (eventMatch && dataMatch) {
+              const event = eventMatch[1];
+              const data = JSON.parse(dataMatch[1]);
+
+              if (currentDesignId.current !== id) return;
+
+              if (event === 'progress') {
+                // Update status with progress message (optional: show in UI)
+                console.log(`[useVitePreview] ${data.message}`);
+              } else if (event === 'ready') {
+                setState((prev) => ({
+                  ...prev,
+                  previewUrl: `${data.url}?t=${Date.now()}`,
+                  status: 'ready',
+                  error: null,
+                  port: data.port,
+                }));
+              } else if (event === 'error') {
+                setState((prev) => ({
+                  ...prev,
+                  previewUrl: null,
+                  status: 'error',
+                  error: data.message || 'Failed to start preview',
+                  port: null,
+                }));
+              }
+            }
+          }
+        }
+      } else {
+        // Handle JSON response for static mode
+        const data = await response.json();
+
+        if (currentDesignId.current !== id) return;
+
+        setState((prev) => ({
+          ...prev,
+          previewUrl: data.status === 'ready' ? `${data.url}?t=${Date.now()}` : null,
+          status: data.status === 'ready' ? 'ready' : 'starting',
+          error: null,
+          port: data.port,
+        }));
+
+        // If still starting, poll for ready status
+        if (data.status === 'starting') {
+          await pollForReady(id);
+        }
       }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') return;
@@ -213,20 +265,72 @@ export function useVitePreview(_designId?: string): UseVitePreviewReturn {
         const error = await response.json();
         throw new Error(error.error || 'Failed to start preview server');
       }
-      const data = await response.json();
 
-      if (currentDesignId.current !== id) return;
+      const contentType = response.headers.get('content-type');
 
-      setState((prev) => ({
-        ...prev,
-        previewUrl: data.status === 'ready' ? `${data.url}?t=${Date.now()}` : null,
-        status: data.status === 'ready' ? 'ready' : 'starting',
-        error: null,
-        port: data.port,
-      }));
+      // Handle SSE stream for dynamic mode
+      if (contentType?.includes('text/event-stream')) {
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-      if (data.status === 'starting') {
-        await pollForReady(id);
+        while (reader) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const eventMatch = line.match(/^event: (.+)$/m);
+            const dataMatch = line.match(/^data: (.+)$/m);
+
+            if (eventMatch && dataMatch) {
+              const event = eventMatch[1];
+              const data = JSON.parse(dataMatch[1]);
+
+              if (currentDesignId.current !== id) return;
+
+              if (event === 'progress') {
+                console.log(`[useVitePreview] ${data.message}`);
+              } else if (event === 'ready') {
+                setState((prev) => ({
+                  ...prev,
+                  previewUrl: `${data.url}?t=${Date.now()}`,
+                  status: 'ready',
+                  error: null,
+                  port: data.port,
+                }));
+              } else if (event === 'error') {
+                setState((prev) => ({
+                  ...prev,
+                  previewUrl: null,
+                  status: 'error',
+                  error: data.message || 'Failed to restart preview',
+                  port: null,
+                }));
+              }
+            }
+          }
+        }
+      } else {
+        // Handle JSON response for static mode
+        const data = await response.json();
+
+        if (currentDesignId.current !== id) return;
+
+        setState((prev) => ({
+          ...prev,
+          previewUrl: data.status === 'ready' ? `${data.url}?t=${Date.now()}` : null,
+          status: data.status === 'ready' ? 'ready' : 'starting',
+          error: null,
+          port: data.port,
+        }));
+
+        if (data.status === 'starting') {
+          await pollForReady(id);
+        }
       }
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') return;
