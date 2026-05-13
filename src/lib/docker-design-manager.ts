@@ -259,7 +259,7 @@ class DockerDesignManager {
         ], {
           cwd: designPath,
         });
-      } catch (accessError) {
+      } catch {
         // Compose file doesn't exist, try project name only
         // This works if containers are still running
         console.warn(`[DockerDesignManager] Compose file not found, using project name fallback for ${designId}`);
@@ -410,7 +410,7 @@ class DockerDesignManager {
       }
 
       // Cleanup each orphaned design project
-      for (const projectName of projectNames) {
+      for (const projectName of Array.from(projectNames)) {
         // Check if container is stopped
         const { stdout: status } = await exec('docker', [
           'ps', '-a',

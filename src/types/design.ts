@@ -78,6 +78,7 @@ export interface GenerateRequest {
   prompt: string;
   designId?: string;
   mode?: 'quick' | 'full';
+  designMode?: DesignMode; // 'static' (Vite) or 'dynamic' (Next.js) - only for mode='full'
   images?: string[]; // base64 data URLs for vision
 }
 

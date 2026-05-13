@@ -183,9 +183,42 @@ export interface DynamicMessage {
 }
 
 /**
- * Build messages array for Bedrock Converse API (dynamic mode)
+ * Build messages for Bedrock Converse API (dynamic mode - Next.js + Prisma)
+ * Returns same structure as buildEnhancedMessages for API compatibility
  */
 export function buildDynamicMessages(
+  userPrompt: string,
+  existingFiles?: Record<string, string>,
+  existingDeps?: string[]
+) {
+  let userContent = '';
+
+  // If refining existing design, include context
+  if (existingFiles && Object.keys(existingFiles).length > 0) {
+    userContent += 'Current design files:\n';
+    for (const [path, content] of Object.entries(existingFiles)) {
+      userContent += `====${path}====\n${content}\n\n`;
+    }
+
+    if (existingDeps && existingDeps.length > 0) {
+      userContent += `\nInstalled packages: ${existingDeps.join(', ')}\n\n`;
+    }
+
+    userContent += `Modification request: ${userPrompt}`;
+  } else {
+    userContent = userPrompt;
+  }
+
+  return {
+    system: [{ text: DYNAMIC_SYSTEM_PROMPT }],
+    messages: [{ role: 'user' as const, content: [{ text: userContent }] }],
+  };
+}
+
+/**
+ * Legacy function for backwards compatibility - kept for reference but not used
+ */
+export function buildDynamicMessagesLegacy(
   userPrompt: string,
   existingFiles?: Record<string, string>,
   existingDeps?: string[],

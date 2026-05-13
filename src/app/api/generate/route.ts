@@ -3,6 +3,7 @@ import { ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { getBedrockClient, MODEL_ID } from '@/lib/bedrock-client';
 import { buildMessages } from '@/lib/prompt-builder';
 import { buildEnhancedMessages } from '@/lib/enhanced-prompt-builder';
+import { buildDynamicMessages } from '@/lib/dynamic-prompt-builder';
 import { parseGenerationResponse } from '@/lib/component-parser';
 import {
   parseStructuredResponse,
@@ -10,12 +11,12 @@ import {
 } from '@/lib/response-parser';
 import { designService } from '@/lib/design-service';
 import { packageService } from '@/lib/package-service';
-import type { GenerateRequest } from '@/types/design';
+import type { GenerateRequest, DesignMode } from '@/types/design';
 
 export async function POST(request: NextRequest) {
   try {
     const body: GenerateRequest = await request.json();
-    const { prompt, designId, mode = 'quick', images } = body;
+    const { prompt, designId, mode = 'quick', designMode, images } = body;
 
     if (!prompt || typeof prompt !== 'string') {
       return NextResponse.json(
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest) {
 
     // Mode: full (new Vite-based multi-file generation)
     if (mode === 'full') {
-      return handleFullMode(prompt, designId, images);
+      return handleFullMode(prompt, designId, designMode, images);
     }
 
     return NextResponse.json(
@@ -125,33 +126,38 @@ async function handleQuickMode(prompt: string, images?: string[]): Promise<NextR
 }
 
 /**
- * Full mode: Vite-based multi-file generation with design creation
+ * Full mode: Multi-file generation with design creation (Vite or Next.js)
  */
 async function handleFullMode(
   prompt: string,
   existingDesignId?: string,
+  requestedMode?: DesignMode,
   images?: string[]
 ): Promise<NextResponse> {
   const client = getBedrockClient();
 
   // Load existing design files if refining
-  let existingFiles: Array<{ path: string; content: string }> = [];
+  let existingFilesArray: Array<{ path: string; content: string }> = [];
+  let existingFilesRecord: Record<string, string> = {};
   let existingDeps: string[] = [];
+  let actualMode: DesignMode = requestedMode || 'static';
 
   if (existingDesignId) {
     try {
       const design = await designService.getDesign(existingDesignId);
-      existingFiles = Object.entries(design.fileContents).map(([path, content]) => ({
+      existingFilesArray = Object.entries(design.fileContents).map(([path, content]) => ({
         path,
         content,
       }));
+      existingFilesRecord = design.fileContents;
       existingDeps = design.dependencies;
+      actualMode = design.mode; // Use existing design's mode
 
       // Add prompt to history
       await designService.addPrompt(existingDesignId, prompt);
 
-      console.log(`[DEBUG] Refining existing design: ${existingDesignId}`);
-      console.log(`[DEBUG] Loaded ${existingFiles.length} existing files`);
+      console.log(`[DEBUG] Refining existing design: ${existingDesignId} (mode: ${actualMode})`);
+      console.log(`[DEBUG] Loaded ${existingFilesArray.length} existing files`);
     } catch {
       return NextResponse.json(
         { error: 'Design not found' },
@@ -160,8 +166,10 @@ async function handleFullMode(
     }
   }
 
-  // Build enhanced prompt with Vite-aware system message
-  const { system, messages } = buildEnhancedMessages(prompt, existingFiles, existingDeps);
+  // Build prompt based on design mode
+  const { system, messages } = actualMode === 'dynamic'
+    ? buildDynamicMessages(prompt, existingFilesRecord, existingDeps)
+    : buildEnhancedMessages(prompt, existingFilesArray, existingDeps);
 
   // Inject image blocks into user message if provided
   if (images && images.length > 0) {
@@ -179,7 +187,8 @@ async function handleFullMode(
   }
 
   console.log('[DEBUG] Full mode - Using model ID:', MODEL_ID);
-  console.log('[DEBUG] Existing files:', existingFiles.length);
+  console.log('[DEBUG] Design mode:', actualMode);
+  console.log('[DEBUG] Existing files:', existingFilesArray.length);
 
   const command = new ConverseCommand({
     modelId: MODEL_ID,
@@ -249,25 +258,36 @@ async function handleFullMode(
   } else {
     // Create new design
     const designName = extractNameFromPrompt(prompt);
-    const appFile = parsed.files.find((f) => f.path === 'src/App.tsx');
 
-    if (!appFile) {
+    // Validate entry file based on mode
+    const expectedEntryPath = actualMode === 'dynamic' ? 'src/app/page.tsx' : 'src/App.tsx';
+    const entryFile = parsed.files.find((f) => f.path === expectedEntryPath);
+
+    if (!entryFile) {
       return NextResponse.json(
-        { error: 'AI did not generate required src/App.tsx file' },
+        {
+          error: `AI did not generate required ${expectedEntryPath} file for ${actualMode} mode`,
+          generatedFiles: parsed.files.map(f => f.path)
+        },
         { status: 422 }
       );
     }
 
-    const design = await designService.createDesign(designName, prompt, appFile.content);
+    const design = await designService.createDesign(
+      designName,
+      prompt,
+      entryFile.content,
+      actualMode
+    );
     finalDesignId = design.id;
 
-    // Write additional component files
-    const otherFiles = parsed.files.filter((f) => f.path !== 'src/App.tsx');
+    // Write additional files (all except entry file)
+    const otherFiles = parsed.files.filter((f) => f.path !== expectedEntryPath);
     for (const file of otherFiles) {
       await designService.updateFile(finalDesignId, file.path, file.content);
     }
 
-    console.log(`[DEBUG] Created design ${finalDesignId} with ${parsed.files.length} files`);
+    console.log(`[DEBUG] Created ${actualMode} design ${finalDesignId} with ${parsed.files.length} files`);
   }
 
   // Auto-install missing dependencies (fire and forget, client polls status)
