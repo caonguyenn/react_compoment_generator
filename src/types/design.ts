@@ -1,3 +1,15 @@
+export type DesignMode = 'static' | 'dynamic';
+
+export interface ContainerInfo {
+  appContainerId: string;
+  dbContainerId: string;
+  networkId: string;
+  port: number;
+  status: 'starting' | 'ready' | 'stopping' | 'error';
+  startedAt: number;
+  lastAccess: number;
+}
+
 export interface DesignChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -9,6 +21,7 @@ export interface DesignChatMessage {
 export interface DesignMetadata {
   id: string;
   name: string;
+  mode: DesignMode;        // 'static' (Vite) or 'dynamic' (Docker+Next.js)
   createdAt: string;       // ISO 8601
   updatedAt: string;       // ISO 8601
   prompts: string[];       // Prompt history (legacy, kept for compat)
@@ -20,6 +33,7 @@ export interface DesignMetadata {
 export interface DesignSummary {
   id: string;
   name: string;
+  mode: DesignMode;
   createdAt: string;
   updatedAt: string;
   promptCount: number;
@@ -31,6 +45,7 @@ export interface DesignDetail extends DesignMetadata {
 
 export interface CreateDesignRequest {
   name: string;
+  mode?: DesignMode;       // default 'static'
   prompt?: string;
   initialCode?: string;
 }

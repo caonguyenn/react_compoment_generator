@@ -23,6 +23,18 @@ import {
   getDefaultAppTsx,
   getNpmrc,
 } from './vite-project-template';
+import {
+  getPackageJson as getNextPackageJson,
+  getNextConfig,
+  getTsConfig as getNextTsConfig,
+  getTailwindConfig as getNextTailwindConfig,
+  getPostCssConfig as getNextPostCssConfig,
+  getPrismaSchema,
+  getRootLayout,
+  getDefaultPage,
+  getGlobalsCss,
+  getPrismaClient,
+} from './next-project-template';
 import type { DesignMetadata, DesignSummary, DesignDetail, DesignChatMessage } from '@/types/design';
 
 class DesignService {
@@ -156,12 +168,46 @@ class DesignService {
   }
 
   /**
-   * Create new design with full Vite project structure
+   * Scaffold complete Next.js project structure with Prisma
+   */
+  private async scaffoldNextjsProject(
+    id: string,
+    designPath: string,
+    initialCode?: string
+  ): Promise<void> {
+    // Create directories
+    await fs.mkdir(path.join(designPath, 'src', 'app'), { recursive: true });
+    await fs.mkdir(path.join(designPath, 'src', 'lib'), { recursive: true });
+    await fs.mkdir(path.join(designPath, 'prisma'), { recursive: true });
+
+    // Write config files
+    await Promise.all([
+      fs.writeFile(path.join(designPath, 'package.json'), getNextPackageJson(id)),
+      fs.writeFile(path.join(designPath, 'next.config.mjs'), getNextConfig()),
+      fs.writeFile(path.join(designPath, 'tsconfig.json'), getNextTsConfig()),
+      fs.writeFile(path.join(designPath, 'tailwind.config.ts'), getNextTailwindConfig()),
+      fs.writeFile(path.join(designPath, 'postcss.config.js'), getNextPostCssConfig()),
+      fs.writeFile(path.join(designPath, 'prisma', 'schema.prisma'), getPrismaSchema()),
+    ]);
+
+    // Write source files
+    const pageCode = initialCode || getDefaultPage(id);
+    await Promise.all([
+      fs.writeFile(path.join(designPath, 'src', 'app', 'layout.tsx'), getRootLayout()),
+      fs.writeFile(path.join(designPath, 'src', 'app', 'page.tsx'), pageCode),
+      fs.writeFile(path.join(designPath, 'src', 'app', 'globals.css'), getGlobalsCss()),
+      fs.writeFile(path.join(designPath, 'src', 'lib', 'db.ts'), getPrismaClient()),
+    ]);
+  }
+
+  /**
+   * Create new design with full project structure (Vite or Next.js based on mode)
    */
   async createDesign(
     name: string,
     prompt: string,
-    initialCode?: string
+    initialCode?: string,
+    mode: 'static' | 'dynamic' = 'static'
   ): Promise<DesignMetadata> {
     // Check design count limit
     const existing = await this.listDesigns();
@@ -177,18 +223,26 @@ class DesignService {
     await fs.mkdir(designPath, { recursive: true });
 
     try {
-      // Scaffold Vite project
-      await this.scaffoldViteProject(id, designPath, initialCode);
+      // Scaffold project based on mode
+      if (mode === 'static') {
+        await this.scaffoldViteProject(id, designPath, initialCode);
+      } else {
+        await this.scaffoldNextjsProject(id, designPath, initialCode);
+      }
 
       // Create metadata
       const metadata: DesignMetadata = {
         id,
         name,
+        mode,
         createdAt: now,
         updatedAt: now,
         prompts: [prompt],
         dependencies: [],
-        files: ['src/App.tsx', 'src/main.tsx', 'src/index.css'],
+        files:
+          mode === 'static'
+            ? ['src/App.tsx', 'src/main.tsx', 'src/index.css']
+            : ['src/app/page.tsx', 'src/app/layout.tsx', 'src/app/globals.css', 'src/lib/db.ts'],
         chatHistory: [],
       };
 
@@ -225,6 +279,7 @@ class DesignService {
           designs.push({
             id: metadata.id,
             name: metadata.name,
+            mode: metadata.mode ?? 'static', // Migration: legacy designs default to static
             createdAt: metadata.createdAt,
             updatedAt: metadata.updatedAt,
             promptCount: metadata.prompts.length,
@@ -248,6 +303,22 @@ class DesignService {
   }
 
   /**
+   * Get design metadata only (fast, no file reads)
+   */
+  async getDesignMetadata(id: string): Promise<DesignMetadata> {
+    const designPath = this.getDesignPath(id);
+    const metadataPath = path.join(designPath, METADATA_FILE);
+    const metadataContent = await fs.readFile(metadataPath, 'utf-8');
+    const metadata: DesignMetadata = JSON.parse(metadataContent);
+
+    // Migrate legacy designs
+    if (!metadata.chatHistory) metadata.chatHistory = [];
+    if (!metadata.mode) metadata.mode = 'static';
+
+    return metadata;
+  }
+
+  /**
    * Get design with all file contents
    */
   async getDesign(id: string): Promise<DesignDetail> {
@@ -259,6 +330,8 @@ class DesignService {
     const metadata: DesignMetadata = JSON.parse(metadataContent);
     // Migrate legacy designs that predate chatHistory field
     if (!metadata.chatHistory) metadata.chatHistory = [];
+    // Migrate legacy designs that predate mode field
+    if (!metadata.mode) metadata.mode = 'static';
 
     // Find all source files
     const srcPath = path.join(designPath, DESIGN_SRC_DIR);
@@ -338,9 +411,25 @@ class DesignService {
   }
 
   /**
-   * Delete design folder
+   * Delete design folder (and Docker stack if dynamic mode)
    */
   async deleteDesign(id: string): Promise<void> {
+    // Check if this is a dynamic design and cleanup Docker resources
+    try {
+      const metadataPath = path.join(this.getDesignPath(id), METADATA_FILE);
+      const metadataContent = await fs.readFile(metadataPath, 'utf-8');
+      const metadata: DesignMetadata = JSON.parse(metadataContent);
+
+      if (metadata.mode === 'dynamic') {
+        // Dynamic import to avoid circular dependency
+        const { dockerDesignManager } = await import('./docker-design-manager');
+        await dockerDesignManager.destroyStack(id);
+      }
+    } catch (error) {
+      // If metadata read fails, continue with deletion anyway
+      console.error(`[DesignService] Error checking design mode for ${id}:`, error);
+    }
+
     const designPath = this.getDesignPath(id);
     await fs.rm(designPath, { recursive: true, force: true });
   }

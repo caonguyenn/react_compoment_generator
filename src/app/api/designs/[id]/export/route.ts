@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import JSZip from 'jszip';
 import { designService } from '@/lib/design-service';
+import { generateDockerCompose, generateDockerfile, generateReadme } from '@/lib/export-templates';
 
 const DESIGN_ID_REGEX = /^[A-Za-z0-9_-]+$/;
 const SKIP_ENTRIES = new Set(['node_modules', 'dist', 'metadata.json', '.vite']);
@@ -46,6 +47,16 @@ export async function GET(
 
     const zip = new JSZip();
     await addDirectoryToZip(zip, designPath);
+
+    // Get design metadata to check mode
+    const metadata = await designService.getDesignMetadata(designId);
+
+    // Add Docker deployment files for dynamic designs
+    if (metadata.mode === 'dynamic') {
+      zip.file('docker-compose.yml', generateDockerCompose());
+      zip.file('Dockerfile', generateDockerfile());
+      zip.file('README.md', generateReadme(metadata.name));
+    }
 
     const zipBuffer = await zip.generateAsync({
       type: 'nodebuffer',

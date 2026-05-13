@@ -7,18 +7,32 @@ services:
       target: dev
     ports:
       - "3000:3000"
+      - "6001-6100:6001-6100"  # Dynamic design preview ports (DooD containers)
     volumes:
       - ./src:/app/src
       - ./public:/app/public
       - designs-data:/app/designs
       - /app/node_modules
+      - /var/run/docker.sock:/var/run/docker.sock  # DooD: mount host Docker socket
     env_file:
       - .env.local
     environment:
       - DESIGNS_PATH=/app/designs
       - NODE_ENV=development
+      # Static mode (Vite)
       - VITE_PORT_START=5173
       - VITE_PORT_END=5222
+      - MAX_VITE_SERVERS=3
+      # Dynamic mode (Docker + Next.js)
+      - DOCKER_ENABLED=true
+      - DOCKER_PORT_START=6001
+      - DOCKER_PORT_END=6100
+      - MAX_DOCKER_STACKS=3
+      - DOCKER_STARTUP_TIMEOUT=60000
+      - DOCKER_IDLE_TIMEOUT=600000
+      - POSTGRES_IMAGE=postgres:16-alpine
+      - NEXTJS_APP_IMAGE=node:20-alpine
+      - DYNAMIC_POSTGRES_PASSWORD=devpassword
     command: /app/scripts/init-designs.sh
 
 volumes:

@@ -35,7 +35,8 @@ export async function POST(request: NextRequest) {
     const design = await designService.createDesign(
       body.name,
       body.prompt || '',
-      body.initialCode
+      body.initialCode,
+      body.mode || 'static'
     );
 
     return NextResponse.json(design, { status: 201 });
