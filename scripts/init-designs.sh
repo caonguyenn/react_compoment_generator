@@ -6,6 +6,11 @@ SHARED_DIR="/app/designs/_shared"
 # Create shared directory structure if it doesn't exist
 mkdir -p "$SHARED_DIR"
 
+# Ensure .npmrc for flat hoisting (symlink strategy requires it)
+if [ ! -f "$SHARED_DIR/.npmrc" ]; then
+  echo "shamefully-hoist=true" > "$SHARED_DIR/.npmrc"
+fi
+
 # Copy package.json if it doesn't exist in the volume
 if [ ! -f "$SHARED_DIR/package.json" ]; then
   echo "Initializing shared dependencies package.json..."
@@ -34,10 +39,10 @@ fi
 if [ ! -d "$SHARED_DIR/node_modules" ]; then
   echo "Installing shared base dependencies..."
   cd "$SHARED_DIR"
-  npm install
+  pnpm install
   echo "Shared dependencies installed."
 fi
 
 # Start Next.js dev server
 cd /app
-exec npm run dev
+exec pnpm run dev

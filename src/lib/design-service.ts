@@ -21,6 +21,7 @@ import {
   getMainTsx,
   getIndexCss,
   getDefaultAppTsx,
+  getNpmrc,
 } from './vite-project-template';
 import type { DesignMetadata, DesignSummary, DesignDetail, DesignChatMessage } from '@/types/design';
 
@@ -133,6 +134,7 @@ class DesignService {
 
     // Write all config files
     await Promise.all([
+      fs.writeFile(path.join(designPath, '.npmrc'), getNpmrc()),
       fs.writeFile(path.join(designPath, 'index.html'), getIndexHtml()),
       fs.writeFile(path.join(designPath, 'package.json'), getPackageJson(id)),
       fs.writeFile(path.join(designPath, 'vite.config.ts'), getViteConfig()),

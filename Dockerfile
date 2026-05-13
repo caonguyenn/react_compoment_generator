@@ -3,11 +3,12 @@ FROM node:20-slim AS base
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 make g++ && rm -rf /var/lib/apt/lists/*
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 
 # Dependencies stage
 FROM base AS deps
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 # Dev stage (supports running Vite servers at runtime)
 FROM base AS dev
@@ -22,7 +23,7 @@ CMD ["/app/scripts/init-designs.sh"]
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+RUN pnpm run build
 
 # Production stage
 FROM node:20-slim AS prod

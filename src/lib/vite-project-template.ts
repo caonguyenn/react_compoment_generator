@@ -39,7 +39,7 @@ import path from 'path';
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '0.0.0.0',
+    host: '127.0.0.1',
     hmr: false,
   },
   resolve: {
@@ -127,4 +127,8 @@ export function getDefaultAppTsx(): string {
   );
 }
 `;
+}
+
+export function getNpmrc(): string {
+  return 'shamefully-hoist=true\n';
 }

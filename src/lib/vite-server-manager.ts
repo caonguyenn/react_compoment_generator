@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from 'child_process';
+import http from 'http';
 import path from 'path';
 import { PortPool } from './port-pool';
 import { designService } from './design-service';
@@ -174,8 +175,7 @@ class ViteServerManager {
 
       // After log fires, probe HTTP until it actually responds
       const probeHttp = (attemptsLeft = 20): void => {
-        const http = require('http') as typeof import('http');
-        const req = http.get(`http://localhost:${port}/api/designs/${designId}/preview/proxy/`, (res) => {
+        const req = http.get(`http://localhost:${port}/`, (res) => {
           res.resume();
           cleanup();
           resolve();

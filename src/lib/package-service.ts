@@ -5,12 +5,12 @@ import { SHARED_PATH } from './design-constants';
 import { designService } from './design-service';
 import type { PackageInfo, InstallResult } from '@/types/design';
 
-// Regex for npm version/range validation (semver + dist-tags + ranges)
-const NPM_VERSION_REGEX = /^[a-zA-Z0-9._^~>=<|*\- ]+$/;
+// Regex for package version/range validation (semver + dist-tags + ranges)
+const VERSION_REGEX = /^[a-zA-Z0-9._^~>=<|*\- ]+$/;
 
-function runNpm(args: string[], cwd: string, timeout: number): Promise<void> {
+function runPnpm(args: string[], cwd: string, timeout: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('npm', args, {
+    const proc = spawn('pnpm', args, {
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: false, // never use shell — prevents injection
@@ -21,7 +21,7 @@ function runNpm(args: string[], cwd: string, timeout: number): Promise<void> {
     proc.on('error', reject);
     proc.on('close', (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`npm ${args[0]} exited with code ${code}: ${stderr}`));
+      else reject(new Error(`pnpm ${args[0]} exited with code ${code}: ${stderr}`));
     });
   });
 }
@@ -123,7 +123,7 @@ class PackageService {
     }
 
     // Validate version parameter to prevent injection
-    if (version !== undefined && !NPM_VERSION_REGEX.test(version)) {
+    if (version !== undefined && !VERSION_REGEX.test(version)) {
       return { success: false, package: name, error: 'Invalid package version' };
     }
 
@@ -157,8 +157,8 @@ class PackageService {
         }
       }
 
-      // Install package — shell:false + --ignore-scripts prevents injection and postinstall RCE
-      await runNpm(['install', spec, '--save', '--legacy-peer-deps', '--ignore-scripts'], designPath, 60000);
+      // Install package — pnpm add + --ignore-scripts prevents postinstall RCE
+      await runPnpm(['add', spec, '--ignore-scripts'], designPath, 60000);
 
       // Update metadata
       await designService.addDependency(designId, name);
@@ -243,8 +243,8 @@ class PackageService {
         };
       }
 
-      // Uninstall package — shell:false prevents injection
-      await runNpm(['uninstall', name, '--save'], designPath, 30000);
+      // Uninstall package
+      await runPnpm(['remove', name], designPath, 30000);
 
       // Update metadata
       await designService.removeDependency(designId, name);
