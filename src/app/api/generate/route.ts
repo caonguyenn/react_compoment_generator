@@ -8,9 +8,11 @@ import { parseGenerationResponse } from '@/lib/component-parser';
 import {
   parseStructuredResponse,
   extractNameFromPrompt,
+  extractImplicitDependencies,
 } from '@/lib/response-parser';
 import { designService } from '@/lib/design-service';
 import { packageService } from '@/lib/package-service';
+import { validateImports } from '@/lib/css-validator';
 import type { GenerateRequest, DesignMode } from '@/types/design';
 
 export async function POST(request: NextRequest) {
@@ -150,7 +152,9 @@ async function handleFullMode(
         content,
       }));
       existingFilesRecord = design.fileContents;
-      existingDeps = design.dependencies;
+      // Merge explicit deps with implicit deps already present in existing files
+      const implicitExisting = extractImplicitDependencies(existingFilesArray, design.mode);
+      existingDeps = Array.from(new Set([...design.dependencies, ...implicitExisting]));
       actualMode = design.mode; // Use existing design's mode
 
       // Add prompt to history
@@ -195,7 +199,7 @@ async function handleFullMode(
     system,
     messages,
     inferenceConfig: {
-      maxTokens: 8192,
+      maxTokens: 32000, // Near max (Claude supports up to ~32K output tokens)
       temperature: 0.7,
     },
   });
@@ -214,14 +218,15 @@ async function handleFullMode(
   console.log('[DEBUG] Response text preview:', responseText.substring(0, 500));
   console.log('[DEBUG] Stop reason:', stopReason);
 
-  if (stopReason === 'max_tokens') {
+  const wasTruncated = stopReason === 'max_tokens';
+  if (wasTruncated) {
     console.warn('[WARN] Response was truncated due to max_tokens limit');
   }
 
   // Parse structured response
   let parsed;
   try {
-    parsed = parseStructuredResponse(responseText);
+    parsed = parseStructuredResponse(responseText, actualMode, !!existingDesignId);
     console.log('[DEBUG] Parsed files:', parsed.files.map((f) => f.path));
     console.log('[DEBUG] Parsed dependencies:', parsed.dependencies);
   } catch (parseError) {
@@ -234,13 +239,31 @@ async function handleFullMode(
     );
   }
 
-  // Validate dependency count (max 5 new deps per generation)
+  // Check for incomplete files (syntax truncation)
+  if (parsed.hasIncompleteFiles && parsed.incompleteFiles) {
+    console.warn('[WARN] Incomplete/truncated files detected:');
+    for (const file of parsed.incompleteFiles) {
+      console.warn(`  - ${file} appears truncated`);
+    }
+  }
+
+  // Validate imports to detect missing files (truncation issue)
+  const importValidation = validateImports(parsed.files);
+  const hasIncompleteImports = importValidation.missingImports.length > 0;
+
+  if (hasIncompleteImports) {
+    console.warn('[WARN] Missing imported files detected (likely truncation):');
+    for (const missing of importValidation.missingImports) {
+      console.warn(`  - ${missing.file} imports ${missing.import}`);
+    }
+    console.warn('[INFO] Will still save partial generation and allow continuation');
+  }
+
+  // Cap new deps at 10 — trim excess rather than failing the whole generation
   const newDeps = parsed.dependencies.filter((dep) => !existingDeps.includes(dep));
-  if (newDeps.length > 5) {
-    return NextResponse.json(
-      { error: 'Too many new dependencies requested (max 5 per generation)' },
-      { status: 400 }
-    );
+  if (newDeps.length > 10) {
+    console.warn(`[WARN] Too many new deps (${newDeps.length}), trimming to 10:`, newDeps);
+    parsed.dependencies = [...existingDeps.filter(d => parsed.dependencies.includes(d)), ...newDeps.slice(0, 10)];
   }
 
   // Create or update design
@@ -252,6 +275,14 @@ async function handleFullMode(
 
     for (const file of parsed.files) {
       await designService.updateFile(finalDesignId, file.path, file.content);
+    }
+
+    // Delete files that AI marked for removal
+    if (parsed.deletedFiles && parsed.deletedFiles.length > 0) {
+      for (const filePath of parsed.deletedFiles) {
+        await designService.deleteFile(finalDesignId, filePath);
+      }
+      console.log(`[DEBUG] Deleted ${parsed.deletedFiles.length} files from ${finalDesignId}`);
     }
 
     console.log(`[DEBUG] Updated design ${finalDesignId} with ${parsed.files.length} files`);
@@ -290,6 +321,12 @@ async function handleFullMode(
     console.log(`[DEBUG] Created ${actualMode} design ${finalDesignId} with ${parsed.files.length} files`);
   }
 
+  // Write Prisma schema if dynamic mode generated models
+  if (actualMode === 'dynamic' && parsed.prismaModels) {
+    await designService.updatePrismaSchema(finalDesignId, parsed.prismaModels);
+    console.log(`[DEBUG] Updated Prisma schema for ${finalDesignId}`);
+  }
+
   // Auto-install missing dependencies (fire and forget, client polls status)
   if (parsed.dependencies.length > 0) {
     console.log('[DEBUG] Queueing package installs:', parsed.dependencies);
@@ -316,5 +353,10 @@ async function handleFullMode(
     files: parsed.files,
     dependencies: parsed.dependencies,
     explanation: parsed.explanation,
+    truncated: wasTruncated || hasIncompleteImports || parsed.hasIncompleteFiles,
+    incompleteImports: hasIncompleteImports,
+    missingCount: importValidation.missingImports.length,
+    hasIncompleteFiles: parsed.hasIncompleteFiles,
+    incompleteFilesList: parsed.incompleteFiles,
   });
 }

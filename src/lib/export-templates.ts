@@ -26,7 +26,7 @@ services:
       - ${volumeMount}
       - node_modules:${workingDir}/node_modules
       - nextjs_cache:${workingDir}/.next
-    command: sh -c "npm install && (npx prisma generate 2>/dev/null || echo 'No Prisma models, skipping') && (npx prisma migrate deploy 2>/dev/null || echo 'No migrations, skipping') && npm run dev"
+    command: sh -c "npm install && npx prisma generate && (npx prisma migrate deploy --skip-generate 2>/dev/null || npx prisma db push --accept-data-loss 2>/dev/null || echo 'DB sync skipped') && npm run dev"
     depends_on:
       db:
         condition: service_healthy

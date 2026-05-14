@@ -92,4 +92,7 @@ export interface FullGenerateResponse {
   files: Array<{ path: string; content: string }>;
   dependencies: string[];
   explanation: string;
+  truncated?: boolean; // True if response was cut off due to token limit or incomplete imports
+  incompleteImports?: boolean; // True if imports reference missing files
+  missingCount?: number; // Number of missing imported files
 }

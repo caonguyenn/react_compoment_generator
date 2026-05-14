@@ -5,9 +5,10 @@ import { useState, useCallback, KeyboardEvent, useRef, useEffect } from 'react';
 interface PromptInputProps {
   onSubmit: (prompt: string, images?: string[]) => void;
   isLoading: boolean;
+  onStop?: () => void;
 }
 
-export default function PromptInput({ onSubmit, isLoading }: PromptInputProps) {
+export default function PromptInput({ onSubmit, isLoading, onStop }: PromptInputProps) {
   const [value, setValue] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -120,28 +121,34 @@ export default function PromptInput({ onSubmit, isLoading }: PromptInputProps) {
           </svg>
         </button>
 
-        <button
-          onClick={handleSubmit}
-          disabled={!canSubmit}
-          className={`flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-medium transition-all flex-shrink-0 whitespace-nowrap ${
-            canSubmit
-              ? 'bg-claude-coral text-white hover:bg-claude-coral-dark shadow-sm'
-              : 'bg-claude-gray-100 text-claude-gray-400 cursor-not-allowed'
-          }`}
-          aria-label="Send"
-        >
-          {isLoading ? (
-            <svg className="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+        {isLoading ? (
+          <button
+            onClick={onStop}
+            className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-medium transition-all flex-shrink-0 whitespace-nowrap bg-claude-gray-100 text-claude-gray-700 hover:bg-claude-gray-200 shadow-sm"
+            aria-label="Stop generation"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="4" y="4" width="16" height="16" rx="2" />
             </svg>
-          ) : (
+            <span>Stop</span>
+          </button>
+        ) : (
+          <button
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            className={`flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-medium transition-all flex-shrink-0 whitespace-nowrap ${
+              canSubmit
+                ? 'bg-claude-coral text-white hover:bg-claude-coral-dark shadow-sm'
+                : 'bg-claude-gray-100 text-claude-gray-400 cursor-not-allowed'
+            }`}
+            aria-label="Send"
+          >
             <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
             </svg>
-          )}
-          <span>Send</span>
-        </button>
+            <span>Send</span>
+          </button>
+        )}
       </div>
     </div>
   );

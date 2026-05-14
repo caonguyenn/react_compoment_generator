@@ -21,7 +21,7 @@ import { useVitePreview } from '@/hooks/use-vite-preview';
 export default function Home() {
   const [showNewDesignModal, setShowNewDesignModal] = useState(false);
   const [rightTab, setRightTab] = useState<RightTab>('preview');
-  const { code, isLoading, error, chatHistory, generateFull, loadHistory, clearHistory, setCode, clearError } = useGeneration();
+  const { code, isLoading, error, chatHistory, truncated, generateFull, continueGeneration, stopGeneration, loadHistory, clearHistory, setCode, clearError } = useGeneration();
   const { html, error: previewError, refresh } = usePreview(code);
 
   const {
@@ -154,7 +154,7 @@ export default function Home() {
       <div className="flex flex-1 overflow-hidden">
         {/* Left: Chat + prompt */}
         <LeftPanel
-          bottomInput={<PromptInput onSubmit={handleGenerateSubmit} isLoading={isLoading} />}
+          bottomInput={<PromptInput onSubmit={handleGenerateSubmit} isLoading={isLoading} onStop={stopGeneration} />}
         >
           <div className="space-y-4">
             {error && (
@@ -166,7 +166,12 @@ export default function Home() {
               </div>
             )}
 
-            <ChatHistory messages={chatHistory} isLoading={isLoading} />
+            <ChatHistory
+              messages={chatHistory}
+              isLoading={isLoading}
+              truncated={truncated}
+              onContinue={activeDesignId ? () => continueGeneration(activeDesignId) : undefined}
+            />
 
             {chatHistory.length === 0 && !isLoading && (
               <div className="flex flex-col items-center justify-center py-12 text-center">

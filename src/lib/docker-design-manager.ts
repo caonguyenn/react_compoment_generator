@@ -207,6 +207,35 @@ class DockerDesignManager {
   }
 
   /**
+   * Re-run prisma generate + migrate inside a running stack's app container.
+   * Called after schema.prisma is updated on disk so the Prisma client is regenerated
+   * before Next.js HMR reloads the code that imports it.
+   */
+  async regeneratePrisma(designId: string): Promise<void> {
+    const stack = this.stacks.get(designId);
+    if (!stack || stack.status !== 'ready') {
+      // Stack not running — the next `docker compose up` will run prisma generate at startup
+      return;
+    }
+
+    const projectName = this.getProjectName(designId);
+    const designPath = designService.getDesignPath(designId);
+
+    try {
+      await exec('docker', [
+        'compose', '-p', projectName,
+        'exec', '-T', 'app',
+        'sh', '-c',
+        'npx prisma generate && npx prisma migrate deploy 2>/dev/null || npx prisma db push --accept-data-loss',
+      ], { cwd: designPath });
+      console.log(`[DockerDesignManager] Prisma regenerated for design ${designId}`);
+    } catch (error) {
+      console.error(`[DockerDesignManager] Prisma regen failed for ${designId}:`, error);
+      // Non-fatal — app will show an error but won't crash the host
+    }
+  }
+
+  /**
    * Stop Docker Compose stack
    */
   async stopStack(designId: string): Promise<void> {
@@ -517,6 +546,7 @@ class DockerDesignManager {
         return;
       } catch {
         const timeElapsed = Date.now() - startTime;
+        console.log(`[DockerDesignManager] HTTP check failed, elapsed: ${timeElapsed}ms, timeout: ${DOCKER_STARTUP_TIMEOUT}ms, attempt: ${i + 1}/${maxRetries}`);
         if (timeElapsed > DOCKER_STARTUP_TIMEOUT) {
           throw new Error(`App failed to start within ${DOCKER_STARTUP_TIMEOUT / 1000}s`);
         }

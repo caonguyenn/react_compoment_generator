@@ -25,11 +25,12 @@ export async function GET(
   }
 
   const subPath = params.path?.join('/') || '';
-  // For static mode, use basePath; for dynamic, proxy directly
-  const basePath = server?.basePath || '/';
-  const fullPath = basePath === '/' ? `/${subPath}` : `${basePath}${subPath}`;
   const url = new URL(request.url);
   const query = url.search || '';
+
+  // For static mode: Vite uses --base so requests must include the base prefix
+  // For dynamic mode: proxy directly at root
+  const fullPath = server ? `${server.basePath}${subPath}` : `/${subPath}`;
 
   // For DooD: use Docker bridge gateway IP to access host ports from container
   // For static mode: localhost works since Vite runs as child process
@@ -48,12 +49,12 @@ export async function GET(
     if (contentType) responseHeaders.set('content-type', contentType);
     responseHeaders.set('cache-control', 'no-store, no-cache, must-revalidate');
 
-    // For HTML responses, rewrite absolute URLs to proxy through our route
-    if (contentType?.includes('text/html') && !subPath) {
+    // For HTML responses from dynamic mode, rewrite absolute URLs to proxy through our route
+    // Static mode (Vite --base) already generates correct proxy-prefixed URLs
+    if (contentType?.includes('text/html') && !subPath && stack) {
       const html = await response.text();
       const proxyBase = `/api/designs/${params.id}/preview/proxy`;
 
-      // Rewrite absolute URLs to go through proxy
       const modifiedHtml = html
         .replace(/href=["']\/(?!\/)/g, `href="${proxyBase}/`)
         .replace(/src=["']\/(?!\/)/g, `src="${proxyBase}/`);

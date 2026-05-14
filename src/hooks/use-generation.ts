@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import type { ChatMessage, GenerationResponse, FullGenerateResponse } from '@/types';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -10,6 +10,7 @@ interface GenerationState {
   isLoading: boolean;
   error: string | null;
   chatHistory: ChatMessage[];
+  truncated: boolean;
 }
 
 async function persistMessage(designId: string, msg: ChatMessage): Promise<void> {
@@ -37,7 +38,9 @@ export function useGeneration() {
     isLoading: false,
     error: null,
     chatHistory: [],
+    truncated: false,
   });
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   /** Load persisted chat history for a design */
   const loadHistory = useCallback(async (designId: string) => {
@@ -115,6 +118,12 @@ export function useGeneration() {
     }
   }, [state.code]);
 
+  const stopGeneration = useCallback(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setState((prev) => ({ ...prev, isLoading: false }));
+  }, []);
+
   const generateFull = useCallback(async (
     prompt: string,
     designId?: string,
@@ -138,11 +147,15 @@ export function useGeneration() {
     // Persist user message immediately
     if (designId) persistMessage(designId, userMsg);
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       const response = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt, mode: 'full', designId, images }),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -152,17 +165,24 @@ export function useGeneration() {
 
       const data: FullGenerateResponse = await response.json();
 
+      // Build explanation message with truncation warning
+      let explanationText = data.explanation || 'Component generated.';
+      if (data.incompleteImports && data.missingCount) {
+        explanationText += `\n\n⚠️ Generation incomplete: ${data.missingCount} files are referenced but not generated. Click "Continue Generation" below to complete.`;
+      }
+
       const assistantMsg: ChatMessage = {
         id: uuidv4(),
         role: 'assistant',
-        content: data.explanation || 'Component generated.',
+        content: explanationText,
         timestamp: Date.now(),
       };
 
       setState((prev) => ({
         ...prev,
         isLoading: false,
-        explanation: data.explanation,
+        explanation: explanationText,
+        truncated: data.truncated || false,
         chatHistory: [...prev.chatHistory, assistantMsg],
       }));
 
@@ -173,6 +193,10 @@ export function useGeneration() {
 
       return data.designId;
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        setState((prev) => ({ ...prev, isLoading: false }));
+        return designId ?? '';
+      }
       const message = err instanceof Error ? err.message : 'Unknown error';
       setState((prev) => ({ ...prev, isLoading: false, error: message }));
       throw err;
@@ -187,9 +211,50 @@ export function useGeneration() {
     setState((prev) => ({ ...prev, error: null }));
   }, []);
 
-  const reset = useCallback(() => {
-    setState({ code: '', explanation: '', isLoading: false, error: null, chatHistory: [] });
+  const continueGeneration = useCallback(async (designId: string) => {
+    setState((prev) => ({ ...prev, isLoading: true, error: null }));
+
+    try {
+      const response = await fetch(`/api/designs/${designId}/continue`, {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Continuation failed');
+      }
+
+      const data = await response.json();
+
+      const assistantMsg: ChatMessage = {
+        id: uuidv4(),
+        role: 'assistant',
+        content: data.explanation || `Added ${data.filesAdded?.length || 0} more files.`,
+        timestamp: Date.now(),
+      };
+
+      setState((prev) => ({
+        ...prev,
+        isLoading: false,
+        explanation: data.explanation,
+        truncated: data.truncated || false,
+        chatHistory: [...prev.chatHistory, assistantMsg],
+      }));
+
+      persistMessage(designId, assistantMsg);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Continuation failed';
+      setState((prev) => ({
+        ...prev,
+        isLoading: false,
+        error: message,
+      }));
+    }
   }, []);
 
-  return { ...state, generate, generateFull, loadHistory, clearHistory, setCode, clearError, reset };
+  const reset = useCallback(() => {
+    setState({ code: '', explanation: '', isLoading: false, error: null, chatHistory: [], truncated: false });
+  }, []);
+
+  return { ...state, generate, generateFull, continueGeneration, stopGeneration, loadHistory, clearHistory, setCode, clearError, reset };
 }

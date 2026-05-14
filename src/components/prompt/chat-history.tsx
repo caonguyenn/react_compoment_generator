@@ -1,18 +1,60 @@
+import { useEffect, useRef, useState } from 'react';
+import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { ChatMessage } from '@/types';
 
 interface ChatHistoryProps {
   messages: ChatMessage[];
   isLoading: boolean;
+  truncated?: boolean;
+  onContinue?: () => void;
 }
 
-export default function ChatHistory({ messages, isLoading }: ChatHistoryProps) {
+export default function ChatHistory({ messages, isLoading, truncated, onContinue }: ChatHistoryProps) {
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+
+  // Auto-scroll to bottom when new messages arrive
+  useEffect(() => {
+    if (shouldAutoScroll && messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, isLoading, shouldAutoScroll]);
+
   if (messages.length === 0 && !isLoading) {
     return null;
   }
 
+  const displayedMessages = isCollapsed ? messages.slice(-3) : messages;
+  const hiddenCount = messages.length - displayedMessages.length;
+
   return (
     <div className="space-y-3">
-      {messages.map((msg) => (
+      {/* Collapse/Expand Toggle */}
+      {messages.length > 3 && (
+        <div className="flex justify-center">
+          <button
+            onClick={() => setIsCollapsed(!isCollapsed)}
+            className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-claude-gray-600 bg-claude-gray-50 hover:bg-claude-gray-100 rounded-full transition-colors"
+          >
+            {isCollapsed ? (
+              <>
+                <ChevronUp className="w-3 h-3" />
+                Show {hiddenCount} older messages
+              </>
+            ) : (
+              <>
+                <ChevronDown className="w-3 h-3" />
+                Collapse history
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* Messages */}
+      <div className="space-y-3">
+      {displayedMessages.map((msg) => (
         <div key={msg.id}>
           {msg.role === 'user' ? (
             <div className="flex justify-end">
@@ -69,6 +111,25 @@ export default function ChatHistory({ messages, isLoading }: ChatHistoryProps) {
           </div>
         </div>
       )}
+
+      {truncated && !isLoading && onContinue && (
+        <div className="flex justify-center py-4">
+          <button
+            onClick={onContinue}
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-claude-coral rounded-lg hover:bg-claude-coral/90 transition-colors shadow-sm hover:shadow-md"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+            </svg>
+            <span>Continue Generation</span>
+            <span className="text-xs opacity-80 ml-1">(truncated)</span>
+          </button>
+        </div>
+      )}
+
+      {/* Auto-scroll anchor */}
+      <div ref={messagesEndRef} />
+      </div>
     </div>
   );
 }

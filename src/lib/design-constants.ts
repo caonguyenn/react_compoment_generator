@@ -4,8 +4,8 @@ export const SHARED_NODE_MODULES = `${SHARED_PATH}/node_modules`;
 export const MAX_DESIGNS = 50;
 export const METADATA_FILE = 'metadata.json';
 export const DESIGN_SRC_DIR = 'src';
-export const MAX_FILE_SIZE = 500 * 1024; // 500KB
-export const MAX_FILES_PER_DESIGN = 30;
+export const MAX_FILE_SIZE = 500 * 2048; // 500KB
+export const MAX_FILES_PER_DESIGN = 100; // Increased for complex e-commerce projects
 
 // Vite server manager constants
 export const VITE_PORT_START = parseInt(process.env.VITE_PORT_START || '5173', 10);
@@ -20,7 +20,7 @@ export const DOCKER_PORT_START = parseInt(process.env.DOCKER_PORT_START || '6001
 export const DOCKER_PORT_END = parseInt(process.env.DOCKER_PORT_END || '6100', 10);
 export const MAX_DOCKER_STACKS = parseInt(process.env.MAX_DOCKER_STACKS || '3', 10);
 export const DOCKER_IDLE_TIMEOUT = parseInt(process.env.DOCKER_IDLE_TIMEOUT || '600000', 10); // 10 min
-export const DOCKER_STARTUP_TIMEOUT = parseInt(process.env.DOCKER_STARTUP_TIMEOUT || '60000', 10); // 60s
+export const DOCKER_STARTUP_TIMEOUT = parseInt(process.env.DOCKER_STARTUP_TIMEOUT || '180000', 10); // 180s (npm install + app startup)
 export const POSTGRES_IMAGE = process.env.POSTGRES_IMAGE || 'postgres:16-alpine';
 export const NEXTJS_APP_IMAGE = process.env.NEXTJS_APP_IMAGE || 'node:20-alpine';
 export const DOCKER_LABEL = 'react-gen=true';

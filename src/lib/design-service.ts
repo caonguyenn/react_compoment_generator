@@ -36,6 +36,8 @@ import {
   getPrismaClient,
 } from './next-project-template';
 import { generateDockerCompose } from './export-templates';
+import { validateAndFixCSS, fixNextConfigImages } from './css-validator';
+import { validateSyntax, isTruncated } from './syntax-validator';
 import type { DesignMetadata, DesignSummary, DesignDetail, DesignChatMessage } from '@/types/design';
 
 class DesignService {
@@ -365,8 +367,41 @@ class DesignService {
       throw new Error('Invalid file path: must be within src/ directory');
     }
 
+    // Auto-fix CSS files
+    let finalContent = content;
+    if (relativePath.endsWith('.css') && relativePath.includes('globals')) {
+      const validation = validateAndFixCSS(content);
+      if (!validation.valid && validation.fixed) {
+        console.log(`[DesignService] Auto-fixed CSS issues in ${relativePath}:`, validation.errors);
+        finalContent = validation.fixed;
+      }
+    }
+
+    // Auto-fix next.config.mjs to allow external images
+    if (relativePath === 'next.config.mjs') {
+      const fixedConfig = fixNextConfigImages(content);
+      if (fixedConfig !== content) {
+        console.log(`[DesignService] Auto-added image domains to ${relativePath}`);
+        finalContent = fixedConfig;
+      }
+    }
+
+    // Validate TypeScript/JavaScript syntax
+    if (relativePath.match(/\.(tsx?|jsx?)$/)) {
+      const syntaxValidation = validateSyntax(finalContent, relativePath);
+      if (!syntaxValidation.valid) {
+        console.error(`[DesignService] Syntax errors in ${relativePath}:`, syntaxValidation.errors);
+
+        if (syntaxValidation.isIncomplete || isTruncated(finalContent)) {
+          console.warn(`[DesignService] File ${relativePath} appears truncated — saving for continuation`);
+        } else {
+          console.warn(`[DesignService] Warning: ${relativePath} has syntax issues but will be saved`);
+        }
+      }
+    }
+
     // Validate file size
-    const contentSize = Buffer.byteLength(content, 'utf-8');
+    const contentSize = Buffer.byteLength(finalContent, 'utf-8');
     if (contentSize > MAX_FILE_SIZE) {
       throw new Error(`File size exceeds maximum (${MAX_FILE_SIZE} bytes)`);
     }
@@ -380,7 +415,7 @@ class DesignService {
     // Atomic write: write to temp, then rename
     const tempPath = `${filePath}.tmp`;
     try {
-      await fs.writeFile(tempPath, content, 'utf-8');
+      await fs.writeFile(tempPath, finalContent, 'utf-8');
       await fs.rename(tempPath, filePath);
     } catch (error) {
       // Cleanup temp file on failure
@@ -411,6 +446,70 @@ class DesignService {
     } catch (error) {
       await fs.rm(tempMetadataPath, { force: true });
       throw error;
+    }
+  }
+
+  async deleteFile(id: string, relativePath: string): Promise<void> {
+    if (!this.validateDesignPath(id, relativePath)) {
+      throw new Error('Invalid file path: must be within src/ directory');
+    }
+
+    const designPath = this.getDesignPath(id);
+    const filePath = path.join(designPath, relativePath);
+
+    await fs.rm(filePath, { force: true });
+
+    // Update metadata to remove from file list
+    const metadataPath = path.join(designPath, METADATA_FILE);
+    const metadataContent = await fs.readFile(metadataPath, 'utf-8');
+    const metadata: DesignMetadata = JSON.parse(metadataContent);
+
+    metadata.files = metadata.files.filter(f => f !== relativePath);
+    metadata.updatedAt = new Date().toISOString();
+
+    const tempMetadataPath = `${metadataPath}.tmp`;
+    try {
+      await fs.writeFile(tempMetadataPath, JSON.stringify(metadata, null, 2));
+      await fs.rename(tempMetadataPath, metadataPath);
+    } catch (error) {
+      await fs.rm(tempMetadataPath, { force: true });
+      throw error;
+    }
+  }
+
+  /**
+   * Append models to prisma/schema.prisma (dynamic mode only)
+   */
+  async updatePrismaSchema(id: string, models: string): Promise<void> {
+    const schemaPath = path.join(this.getDesignPath(id), 'prisma', 'schema.prisma');
+    const baseSchema = `generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+${models}
+`;
+    const tempPath = `${schemaPath}.tmp`;
+    try {
+      await fs.writeFile(tempPath, baseSchema, 'utf-8');
+      await fs.rename(tempPath, schemaPath);
+    } catch (error) {
+      await fs.rm(tempPath, { force: true });
+      throw error;
+    }
+
+    // Regenerate Prisma client inside the running container so the new models
+    // are available before Next.js HMR reloads code that imports @prisma/client
+    try {
+      const { dockerDesignManager } = await import('./docker-design-manager');
+      await dockerDesignManager.regeneratePrisma(id);
+    } catch (error) {
+      console.error(`[DesignService] Prisma regen failed for ${id}:`, error);
     }
   }
 

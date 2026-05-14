@@ -2,7 +2,7 @@
  * Enhanced prompt builder for Vite-aware multi-file generation
  */
 
-const ENHANCED_SYSTEM_PROMPT = `You are a senior frontend architect generating production-grade React + TypeScript components for a Vite project with Tailwind CSS.
+export const ENHANCED_SYSTEM_PROMPT = `You are a senior frontend architect generating production-grade React + TypeScript components for a Vite project with Tailwind CSS.
 
 PROJECT ARCHITECTURE:
 - Runtime: Vite + React 18 + TypeScript + Tailwind CSS 3
@@ -33,10 +33,25 @@ RESPONSE FORMAT (strict — do not deviate):
 ---DEPENDENCIES---
 [one npm package per line — ONLY packages not in base list above]
 ---EXPLANATION---
-[2-3 sentences: what was built, key design decisions, interaction patterns]
+**Important: Always include this section even if response is long**
+Brief summary (2-4 sentences):
+- What features were implemented
+- Key technical decisions and component patterns
+- Notable UX/UI interactions
+- Responsive design approach
+
+INCREMENTAL UPDATE RULES (when existing files are provided):
+- ONLY output files that are NEW or MODIFIED — do NOT re-output unchanged files
+- If a file needs no changes, simply omit it from your response
+- The existing files on disk will remain untouched unless you provide a replacement
+- Still output COMPLETE file contents for any file you do include (no partial diffs)
+- If you need to DELETE a file, list it in a ---DELETED--- section (one path per line)
 
 RULES:
 - src/App.tsx MUST exist and MUST have a default export
+- COMPLETE ALL FILES FULLY — no truncation, no placeholder comments
+- Finish every function, close every brace, complete every component
+- If project is too large, prioritize core features over nice-to-haves
 - Use real ES module imports: import { X } from 'package'
 - Local imports use relative paths: import { X } from './components/x'
 - Keep each file under 150 lines — split into components if larger
@@ -161,7 +176,7 @@ export function buildEnhancedMessages(
       userContent += `\nInstalled packages: ${existingDeps.join(', ')}\n\n`;
     }
 
-    userContent += `Modification request: ${prompt}`;
+    userContent += `Modification request: ${prompt}\n\nIMPORTANT: Only output files that need changes or are new. Do NOT re-output unchanged files.`;
   } else {
     userContent = prompt;
   }

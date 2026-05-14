@@ -115,7 +115,6 @@ class ViteServerManager {
       // Use Vite binary from shared node_modules
       const viteBin = path.resolve(process.cwd(), SHARED_NODE_MODULES, '.bin', 'vite');
 
-      const basePath = `/api/designs/${designId}/preview/proxy/`;
       const proc = spawn(viteBin, ['--port', port.toString(), '--host', '0.0.0.0', '--base', basePath], {
         cwd: designPath,
         stdio: ['ignore', 'pipe', 'pipe'],
